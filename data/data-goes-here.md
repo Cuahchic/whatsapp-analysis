@@ -1,0 +1,1 @@
+# Store the .txt files from WhatsApp in this folder
