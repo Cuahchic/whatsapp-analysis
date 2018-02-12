@@ -13,33 +13,78 @@ library(gplots)
 library(reshape)
 
 
-# Set WD
-setwd("P:/Personal/WhatsApp Analysis")
-#setwd("C:/R Output")
+# Read raw txt file for manipulation
+msgs <- read.table(file = "data/francis-family.txt", quote="", sep="\n", stringsAsFactors = FALSE)
+colnames(msgs) <- c("origmsg")
 
 
-
-# Read in data from CSV and rename columns
-msgs <- read.csv("WhatsAppAnalysis - DataPrep.csv", stringsAsFactors = FALSE, header = FALSE)
-colnames(msgs) <- c("origmsg", "timestamp", "sender", "msg", "ismedia", "numemojis", "ishyperlink")
-
-
-
-# Create function to map long names to short names
-fun.longtoshortname <- function(longname) {
-  cases(
-    "kirk" <- longname=="Kirk Dennehy",
-    "colin" <- longname=="Colin Parry",
-    "chrisy" <- longname=="Chris Parker",
-    "jim" <- longname=="Jamie Chrystal",
-    "hagger" <- longname=="Jonathan Hagger",
-    "kev" <- longname=="Kevin McCluskey",
-    "saul" <- longname=="Saul Milne",
-    "stef" <- longname=="Steven Mallinson",
-    "broome" <- longname=="Steven Wilson",
-    "stu" <- longname=="Stuart Davidson"
-  )
+# Function to clean up messages
+msg.cleanup <- function(msg) {
+  outputmsg <- gsub(pattern = "[^\x01-\x7F]", replacement = "", msg)  # Remove emojies
+  outputmsg <- gsub(pattern = "[[:punct:]]+", replacement = "", x = outputmsg)  # Remove punctuation
+  outputmsg <- trimws(outputmsg)  # Remove remaining whitespace
+  
+  return (outputmsg)
 }
+
+
+# Concatenate multi-line messages
+msgs$timestamp <- ""
+msgs$sender <- ""
+msgs$msg <- ""
+msgs$ismedia <- 0
+msgs$numemojies <- 0
+msgs$ishyperlink <- 0
+msgs$markfordelete <- 0
+
+prevmsg <- ""
+
+for (i in nrow(msgs):1) {
+  msg <- paste(msgs[i,"origmsg"], prevmsg, sep = " ")
+  
+  timestamp <- unlist(regmatches(msg, gregexpr(pattern = "^(0?[1-9]|[12][0-9]|3[01])[\\/\\-](0?[1-9]|1[012])[\\/\\-]\\d{4}, \\d{2}:\\d{2}", text = msg)))
+  
+  if (length(timestamp) > 0) {  # Message contains timestamp so is start of multi- or single-line message
+    prevmsg <- ""
+    msg <- gsub(pattern = timestamp, replacement = "", x = msg)
+    colonLoc <- unlist(gregexpr(pattern = ":", text = msg))[1]
+    
+    if (colonLoc >= 0) { # Other than timestamp message contains colon therefore a username
+      msgs$timestamp[i] <- timestamp
+      msgs$sender[i] <- trimws(gsub(pattern = "[-:]", replacement = "", substr(x = msg, start = 1, stop = colonLoc)))
+      
+      isMedia <- 0
+      numEmojies <- 0
+      isHyperlink <- 0
+      if (unlist(gregexpr(pattern = "<Media omitted>", text = msg))[1] >= 0) {
+        isMedia <- 1
+        msg <- ""
+      } else if (unlist(gregexpr(pattern = "https?:\\/\\/[\\w\\d][\\w\\d\\-]*(\\.[\\w\\d\\-]+)*\\.[\\w]+(\\/[\\w\\-\\_\\(\\)\\.\\?\\=\\&]*)*", text = msg, perl = TRUE))[1] >= 0) {
+        isHyperlink <- 1
+      }
+      
+      numEmojies <- length(which(unlist(gregexpr(pattern = "ðY", text = msg)) >= 0))
+      
+      msgs$msg[i] <- msg.cleanup(substr(x = msg, start = (colonLoc + 1), stop = nchar(msg)))
+      msgs$ismedia[i] <- isMedia
+      msgs$numemojies[i] <- numEmojies
+      msgs$ishyperlink[i] <- isHyperlink
+      
+    } else {  # Not a real message, e.g. information line
+      msgs$markfordelete[i] <- 1
+      next
+    }
+  } else {  # Line doesn't contain a timestamp and therefore add it next time
+    msgs$markfordelete[i] <- 1
+    prevmsg <- msg
+  }
+}
+
+#View(msgs[msgs$markfordelete == 1,])
+# Remove any lines marked for delete and remove this column
+msgs <- msgs[msgs$markfordelete != 1,]
+msgs$markfordelete <- NULL
+
 
 # Create function for similarity comparison
 fun.cosinesimilarity <- function(df) {
@@ -59,34 +104,31 @@ fun.cosinesimilarity <- function(df) {
     }
   }
   
-  df_out
+  return (df_out)
 }
-
-
-
-# Get aliases for names so we can analyse these later
-namesfor.colin <- c("coco", "colin", "colins", "colon", "pazza", "parry", "parrys")
-namesfor.chrisy <- c("chris", "chrisi", "chrissy", "christiphwoar", "christopher", "chrisy", "chrisys", "parker", "parkers", "christiphylis")
-namesfor.saul <- c("saul", "sauls", "sauloman", "saulomon", "milne", "milnes")
-namesfor.jim <- c("jim", "jimbob", "jims", "chrystal", "jamie", "jamies", "jiiiiiiiiiim", "jimbim", "jimbomb", "jiminy")
-namesfor.hagger <- c("hag", "hagg", "hagger", "haggers", "haggerss", "hagroid", "jonathan", "hangler", "hanglers", "hagar", "haggart", "haggerston", "haggertron")
-namesfor.kev <- c("kev", "kevs", "kevin", "mckluskey", "mccluskey", "keeeeeeeev")
-namesfor.broome <- c("brom", "broome", "broomes", "brooooome", "broooooome", "broooooomeeeeeeeee", "broooooooooome", "wilson")
-namesfor.stef <- c("stef", "stefs", "steff", "stefron", "steven", "stevens", "mallinson", "mallinsons", "stevie", "steeeeeeeeeeveeeeeeeen", "steeeeeeeeeeveeeeeeen", "steeeeef")
-namesfor.stu <- c("stu", "stuart", "davidson", "stus", "stuarts")
-namesfor.kirk <- c("denehey", "dennehy", "dennehys", "derney", "derny", "kiokis", "kiokus", "kirk", "kirkimus", "kirkis", "kirks", "kirky", "kirkby", "kirklands", "kirm", "kirmos", "kiiiiiiiiiiiiiiiiiiiiiiiirm", "kiiiiiiiiiiiiiiirm", "koik", "kuiok")
-
 
 
 # Convert timestamp to date format (do it once for ones with hours and once for those which only have a date as they were sent at midnight)
 msgs$origtimestamp <- msgs$timestamp
-msgs$timestamp <- as.POSIXct(msgs$origtimestamp, format="%d/%m/%Y %H:%M")
+msgs$timestamp <- as.POSIXct(msgs$origtimestamp, format="%d/%m/%Y, %H:%M")
 msgs$timestamp[is.na(msgs$timestamp)] <- as.POSIXct(msgs$origtimestamp[is.na(msgs$timestamp)], format="%d/%m/%Y")
 msgs$day <- format(msgs$timestamp,format='%d/%m/%Y')
 
 
 
-# Get sender short names for consistent plotting
+# Get sender short names for consistent plotting (does not consider if more than one person in group has the same first name)
+fun.longtoshortname <- function(longnames) {
+  # Get unique entries of names
+  uniqueNames <- unique(longnames)
+  
+  firstNames <- unlist(regmatches(uniqueNames, gregexpr(pattern = "^[a-zA-Z]+", text = uniqueNames)))
+  
+  namesList <- as.list(firstNames)
+  names(namesList) <- uniqueNames
+  
+  return (as.character(namesList[longnames]))
+}
+
 msgs$sendershortname <- fun.longtoshortname(msgs$sender)
 
 
@@ -108,7 +150,7 @@ msgsbyday <- msgsbyday[order(msgsbyday$day),]
 line_msgs_xaxis <- list(title = "")
 line_msgs_yaxis <- list(title = "Messages Sent Per Day")
 
-plot_ly(x=msgsbyday$day, y=msgsbyday$msgssent, type="scatter", mode = "lines") %>% layout(title = "Messages Sent By Day Over Time", xaxis = line_msgs_xaxis, yaxis = line_msgs_yaxis)
+plot_ly(x=msgsbyday$day, y=msgsbyday$msgssent, type="scatter", mode = "lines") %>% layout(title = "Daily Messages Sent", xaxis = line_msgs_xaxis, yaxis = line_msgs_yaxis)
 
 
 
@@ -134,12 +176,12 @@ wordCorpus <- tm_map(wordCorpus, stripWhitespace)
 pal <- brewer.pal(9,"YlGnBu")  # See http://www.datavis.ca/sasmac/brewerpal.html for colours list
 pal <- pal[-(1:4)]             # Removes lightest colours to make it easier to read
 set.seed(123)
-wordcloud(words = wordCorpus, scale=c(4,0.2), max.words=30, random.order=TRUE, rot.per=0.35, use.r.layout=FALSE, colors=pal)   # See ?wordcloud for more info on settings
+wordcloud(words = wordCorpus, scale=c(3,0.5), max.words=20, random.order=TRUE, rot.per=0.35, use.r.layout=FALSE, colors=pal)   # See ?wordcloud for more info on settings
 
 
 
 # Plot word cloud for a given person
-filter.sendershortname <- "kirk"
+filter.sendershortname <- "Colin"
 
 wordCorpus.filter <- Corpus(VectorSource(msgs[msgs$sendershortname==filter.sendershortname, "msg"]))
 wordCorpus.filter <- tm_map(wordCorpus.filter, removePunctuation)
@@ -150,7 +192,7 @@ wordCorpus.filter <- tm_map(wordCorpus.filter, stripWhitespace)
 pal <- brewer.pal(9,"YlGnBu")  # See http://www.datavis.ca/sasmac/brewerpal.html for colours list
 pal <- pal[-(1:4)]             # Removes lightest colours to make it easier to read
 set.seed(123)
-wordcloud(words = wordCorpus.filter, scale=c(4,0.2), max.words=30, random.order=TRUE, rot.per=0.35, use.r.layout=FALSE, colors=pal)
+wordcloud(words = wordCorpus.filter, scale=c(3,0.5), max.words=20, random.order=TRUE, rot.per=0.35, use.r.layout=FALSE, colors=pal)
 
 
 
@@ -183,58 +225,6 @@ termDocMat <- as.matrix(termDocMat)
 
 
 
-# See how many times each name has been mentioned
-termDocMat.RowSums <- rowSums(termDocMat)
-termDocMat.RowSums <- as.data.frame(termDocMat.RowSums)       # Convert to data frame
-colnames(termDocMat.RowSums) <- c("wordfreq")                 # Rename column to something better
-termDocMat.RowSums$shortname <- factor(rownames(termDocMat.RowSums))
-levels(termDocMat.RowSums$shortname) <- mget(ls(pattern=glob2rx("namesfor.*")))    # Create levels based on groups, see http://stackoverflow.com/questions/20176656/group-variables-in-a-dataframe-r-using-a-specific-list
-
-namefreq <- aggregate(wordfreq ~ shortname, sum, data=termDocMat.RowSums)       # Sum
-namefreq$shortname <- gsub("namesfor.", "", namefreq$shortname)                 # Remove "namesfor." from each group name to get the actual name
-namefreq$propwordfreq <- 100 * namefreq$wordfreq / sum(namefreq$wordfreq)       # Normalise to plot percentage
-
-hist_names_xaxis <- list(title = "")
-hist_names_yaxis <- list(title = "Name Mention (% Of Total Names Mentioned)")
-
-plot_ly(x=namefreq[order(namefreq$propwordfreq, decreasing=TRUE),"shortname"], y=namefreq[order(namefreq$propwordfreq, decreasing=TRUE),"propwordfreq"], type="bar") %>% layout(title = paste("Who Gets Talked About?", sep = ""),xaxis = hist_names_xaxis, yaxis = hist_names_yaxis)
-
-sum(namefreq$wordfreq[namefreq$shortname %in% c("kirk","hagger","colin")])    # Kirk, Hagger and Colin make up 60% of the names mentioned
-
-
-
-# See relative usage of each name based on messages sent
-nameandsender <- merge(x=namefreq, y=aggregate(propmsgssent ~ sendershortname, senderfreq, sum), by.x="shortname", by.y="sendershortname")       # Get table of both variables
-nameandsender$relnameuse <- 100 * (nameandsender$propwordfreq / nameandsender$propmsgssent - 1)  # Get relative name usage
-
-hist_relnames_xaxis <- list(title = "")
-hist_relnames_yaxis <- list(title = "Name Mention Per Message Sent (%)", dtick=50)
-
-plot_ly(x=namefreq[order(nameandsender$relnameuse, decreasing=TRUE),"shortname"], y=nameandsender[order(nameandsender$relnameuse, decreasing=TRUE),"relnameuse"], type="bar") %>% layout(title = paste("Who Do We Think About?", sep = ""), xaxis = hist_relnames_xaxis, yaxis = hist_relnames_yaxis)
-
-
-
-# See who talks about who (create heatmap showing percentage of messages mentioning another person)
-msgsentnorm <- function(x, sndr) {
-  x / sum(senderfreq$msgssent[senderfreq$sendershortname==sndr])
-}
-
-termDocMat.compcloud.names <- as.data.frame(termDocMat.compcloud)
-termDocMat.compcloud.names <- termDocMat.compcloud.names[rownames(termDocMat.compcloud.names) %in% c(namesfor.broome, namesfor.chrisy, namesfor.colin, namesfor.hagger, namesfor.jim, namesfor.kev, namesfor.kirk, namesfor.saul, namesfor.stef, namesfor.stu),]
-termDocMat.compcloud.names$namementioned <- factor(rownames(termDocMat.compcloud.names))
-levels(termDocMat.compcloud.names$namementioned) <- mget(ls(pattern=glob2rx("namesfor.*")))   # Convert names to common name
-namefreq.bysender <- termDocMat.compcloud.names %>% group_by(namementioned) %>% summarise(broome=sum(broome), chrisy=sum(chrisy), colin=sum(colin), hagger=sum(hagger), jim=sum(jim), kev=sum(kev), kirk=sum(kirk), saul=sum(saul), stef=sum(stef), stu=sum(stu)) %>% data.frame %>% melt
-colnames(namefreq.bysender) <- c("namementioned", "sendershortname", "freq")
-namefreq.bysender$namementioned <- gsub("namesfor.", "", namefreq.bysender$namementioned)
-namefreq.bysender <- merge(x=namefreq.bysender, y=aggregate(msgssent ~ sendershortname, sum, data=senderfreq), by.x="sendershortname", by.y="sendershortname")
-namefreq.bysender$freqnorm <- namefreq.bysender$freq / namefreq.bysender$msgssent
-
-htmap.data <- as.matrix(cast(namefreq.bysender, namementioned~sendershortname, sum, value="freqnorm"))
-
-htmap <- heatmap.2(htmap.data, Rowv=NA, Colv=NA, main="Who Mentions Who?", xlab="Sender", ylab="Name Mentioned")
-
-
-
 # Analyse message sentiment
 msgsentiment <- get_nrc_sentiment(msgs$msg)
 summsgsentiment <- colSums(msgsentiment)
@@ -262,7 +252,7 @@ msgsentimentpp$propsentiment <- 100 * msgsentimentpp$freqsentiment / msgsentimen
 hist_sentimentpp_xaxis <- list(title = "")
 hist_sentimentpp_yaxis <- list(title = "Proportion Of Messages With Emotion Per Person (%)")
 
-filter.sentiment <- "disgust"
+filter.sentiment <- "trust"
 #anger, anticipation, disgust, fear, joy, sadness, surprise, trust
 
 plot_ly(x=msgsentimentpp[msgsentimentpp$sentiment==filter.sentiment, "sendershortname"], y=msgsentimentpp[msgsentimentpp$sentiment==filter.sentiment, "propsentiment"], color=msgsentimentpp[msgsentimentpp$sentiment==filter.sentiment, "sentiment"], type="bar", colors=sample(colours(), 1)) %>% layout(title = paste("Sentiment Of ", filter.sentiment, " Per Person", sep = ""), xaxis = hist_sentimentpp_xaxis, yaxis = hist_sentimentpp_yaxis)
@@ -270,15 +260,9 @@ plot_ly(x=msgsentimentpp[msgsentimentpp$sentiment==filter.sentiment, "sendershor
 plot_ly(x=msgsentimentpp$sendershortname, y=msgsentimentpp$propsentiment, color=msgsentimentpp$sentiment, type="bar") %>% layout(title = paste("Sentiment Per Person", sep = ""), xaxis = hist_sentimentpp_xaxis, yaxis = hist_sentimentpp_yaxis)
 
 
-
-# Check for emotionless messages
-msgs[msgs$sendershortname=="stu" & msgs$anger==0 & msgs$anticipation==0 & msgs$disgust==0 & msgs$fear==0 & msgs$joy==0 & msgs$sadness==0 & msgs$surprise==0 & msgs$trust==0,]
-
-
-
 # Quickest responders
-binsize <- 60
-maxresponseduration <- 3600
+binsize <- 30
+maxresponseduration <- 1000
 msg.response <- msgs[,c("timestamp", "sendershortname")] %>% mutate(replier=lead(sendershortname)) %>% mutate(responsetime=difftime(lead(timestamp), timestamp, units=c("secs")))
 msg.response$bin <- cut(as.numeric(msg.response$responsetime), breaks=c(seq(0, min(c(maxresponseduration, max(as.numeric(msg.response$responsetime), na.rm=T))), by=binsize)), labels=F, include.lowest=T)
 
@@ -300,7 +284,7 @@ sum(msg.response.freq$freq[msg.response.freq$bin==1]) / sum(msg.response.freq$fr
 # Most similar vocabularies
 tdm.cossim <- fun.cosinesimilarity(data.frame(termDocMat.compcloud))
 
-filter.sendershortname <- "colin"
+filter.sendershortname <- "Colin"
 
 y.dat <- sort(tdm.cossim[,c(filter.sendershortname)], decreasing=T)
 x.dat <- colnames(tdm.cossim[order(tdm.cossim[,filter.sendershortname], decreasing = T)])
@@ -310,72 +294,7 @@ hist_similarity_yaxis <- list(title = "Cosine Similarity")
 
 plot_ly(x=x.dat, y=y.dat, type="bar", color=x.dat[3], colors=sample(colours(), 1)) %>% layout(showlegend=F, title = paste("Who talks like", filter.sendershortname, "?", sep = " "), xaxis = hist_similarity_xaxis, yaxis = hist_similarity_yaxis)
 
-
-
-# Exonerate or condemn Kirk from falling in love and ignoring the group
-# Get standard colours for plots
-inlove.cols <- c("Alone and unloved" = "black", "Deeply infatuated" = "red")
-
-# Get date of Carly coming on scene and calculate date ranges to search
-carly.date <- as.POSIXct("01/08/2017 00:00", format="%d/%m/%Y %H:%M", tz="UTC")
-
-carly.til.now.days <- floor(as.numeric(difftime(time1=Sys.time(), time2=carly.date, units="days")))
-
-pre.carly.date <- carly.date - (carly.til.now.days * 86400)
-
-# Get only relevant messages and add in love status
-msgs.kirk <- msgs[msgs$sendershortname == "kirk" & msgs$timestamp >= pre.carly.date,]
-msgs.kirk$inlove <- ifelse(msgs.kirk$timestamp < carly.date, "Alone and unloved", "Deeply infatuated")
-
-# Plot raw number of messages sent
-chart.cols <- c(text="cornflowerblue", media="coral1", hyperlink="cyan3")
-ggplot() + geom_bar(data=msgs.kirk, aes(x=inlove, fill=msgtype)) +
-  labs(x="Relationship Status",
-       y="Number of Messages Sent",
-       title=paste0("Kirk's messages ", carly.til.now.days, " days before and after meeting Carly"),
-       fill="Message Type") +
-  scale_fill_manual(values=chart.cols)
-
-
-# Let's look at how many messages were sent each day and the distributions
-msgsbyday.kirk <- data.frame(table(msgs$day[msgs$sendershortname=="kirk" & msgs$timestamp >= pre.carly.date]))
-colnames(msgsbyday.kirk) <- c("day", "msgssent")
-msgsbyday.kirk$day <- as.POSIXct(msgsbyday.kirk$day, format="%d/%m/%Y")
-msgsbyday.kirk <- msgsbyday.kirk[order(msgsbyday.kirk$day),]
-msgsbyday.kirk$inlove <- ifelse(msgsbyday.kirk$day < carly.date, "Alone and unloved", "Deeply infatuated")
-
-ggplot() + geom_density(data = msgsbyday.kirk, aes(x=msgssent, colour=inlove)) +
-  labs(x="Messages Sent Per Day",
-       y="Density",
-       title="Distribution Of Kirk's Messages Sent Per Day Per Relationship Status",
-       colour="Relationship Status") +
-  scale_colour_manual(values=inlove.cols)
-
-
-# Let's see how quickly Kirk responded to other messages
-msg.response.kirk <- msg.response[msg.response$replier=="kirk" &
-                                    msg.response$sendershortname!="kirk" &
-                                    msgs$timestamp >= pre.carly.date,]
-msg.response.kirk$responsetime <- as.numeric(msg.response.kirk$responsetime)
-msg.response.kirk <- msg.response.kirk[!is.na(msg.response.kirk$bin),]  # Only keep messages where Kirk could have been reasonably expected to reply within the same conversation
-msg.response.kirk$inlove <- ifelse(msg.response.kirk$timestamp < carly.date, "Alone and unloved", "Deeply infatuated")
-
-ggplot() + geom_density(data = msg.response.kirk, aes(x=responsetime, colour=inlove)) +
-  labs(x="Time To Reply (secs)",
-       y="Density",
-       title="Distribution Of Kirk's Time To Reply Per Relationship Status",
-       colour="Relationship Status") +
-  scale_colour_manual(values=inlove.cols) +
-  xlim(0,1000)
-
-msgs.replied.60secs.kirk.single <- nrow(msg.response.kirk[msg.response.kirk$inlove=="Alone and unloved" & msg.response.kirk$responsetime < 60,]) / nrow(msg.response.kirk[msg.response.kirk$inlove=="Alone and unloved",])
-msgs.replied.60secs.kirk.notsingle <- nrow(msg.response.kirk[msg.response.kirk$inlove=="Deeply infatuated" & msg.response.kirk$responsetime < 60,]) / nrow(msg.response.kirk[msg.response.kirk$inlove=="Deeply infatuated",])
-
-
-
-
-
-
-
+legend_settings <- list(tickformat = "%.1f")
+plot_ly(z = data.matrix(tdm.cossim), x = names(tdm.cossim), y = names(tdm.cossim), type = "heatmap", colors = colorRamp(c("red", "green"))) %>% layout(title = "Message Similarity Matrix", legend = legend_settings)
 
 
